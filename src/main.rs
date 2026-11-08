@@ -32,8 +32,40 @@ use wayland_protocols::ext::{
     },
 };
 
+fn print_usage(prog: &str) {
+    println!(
+        r#"Usage: {prog} [OPTION]
+
+A wayland client that prints out the pointer position as JSON.
+
+Options:
+  --watch   Continuously print the pointer position
+  --help    Print help
+"#
+    );
+}
+
 fn main() {
     env_logger::init();
+
+    let mut args = VecDeque::from_iter(std::env::args());
+    let prog = args.pop_front().unwrap();
+    let mut watch = false;
+    match args.make_contiguous() {
+        [flag] if flag == "--help" => {
+            print_usage(&prog);
+            std::process::exit(0);
+        }
+        [flag] if flag == "--watch" => {
+            watch = true;
+        }
+        [] => {}
+        _ => {
+            print_usage(&prog);
+            std::process::exit(1);
+        }
+    }
+    warn!("{:?}", args);
 
     let conn = Connection::connect_to_env().unwrap();
 
@@ -63,6 +95,7 @@ fn main() {
         output_for_session: HashMap::default(),
         result: None,
         exit: false,
+        watch,
     };
 
     loop {
@@ -70,22 +103,23 @@ fn main() {
             .dispatch(Duration::from_millis(16), &mut client)
             .unwrap();
 
+        if let Some(PointerPositionResult { info, x, y }) = client.result.take() {
+            let name = info
+                .as_ref()
+                .and_then(|info| info.name.clone())
+                .unwrap_or("Unknown".into());
+            let description = info
+                .as_ref()
+                .and_then(|info| info.description.clone())
+                .unwrap_or("Unknown".into());
+            println!(
+                r#"{{"output": {{"name": {:?}, "description": {:?}}}, "x": {}, "y": {}}}"#,
+                name, description, x, y
+            );
+        }
+
         if client.exit {
-            if let Some(PointerPositionResult { info, x, y }) = &client.result {
-                let name = info
-                    .as_ref()
-                    .and_then(|info| info.name.clone())
-                    .unwrap_or("Unknown".into());
-                let description = info
-                    .as_ref()
-                    .and_then(|info| info.description.clone())
-                    .unwrap_or("Unknown".into());
-                println!(
-                    r#"{{"output": {{"name": {:?}, "description": {:?}}}, "x": {}, "y": {}}}"#,
-                    name, description, x, y
-                );
-                break;
-            }
+            break;
         }
     }
 }
@@ -101,6 +135,7 @@ struct Client {
     output_for_session: HashMap<ExtImageCopyCaptureCursorSessionV1, WlOutput>,
     result: Option<PointerPositionResult>,
     exit: bool,
+    watch: bool,
 }
 
 struct PointerPositionResult {
@@ -299,7 +334,7 @@ impl Dispatch<ExtImageCopyCaptureCursorSessionV1, GlobalData> for Client {
             wayland_protocols::ext::image_copy_capture::v1::client::ext_image_copy_capture_cursor_session_v1::Event::Enter => {},
             wayland_protocols::ext::image_copy_capture::v1::client::ext_image_copy_capture_cursor_session_v1::Event::Leave => {},
             wayland_protocols::ext::image_copy_capture::v1::client::ext_image_copy_capture_cursor_session_v1::Event::Position { x, y } => {
-                state.exit = true;
+                state.exit = !state.watch;
                 state.result = Some(PointerPositionResult { info, x, y });
             },
             wayland_protocols::ext::image_copy_capture::v1::client::ext_image_copy_capture_cursor_session_v1::Event::Hotspot { .. } => {
